@@ -10,6 +10,7 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader
 from pathlib import Path
+import matplotlib.pyplot as plt
 
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -31,9 +32,9 @@ def main():
     # Configuration
     N_z = 20
     dt = 0.1
-    n_trajectories = 30
-    trajectory_length = 30
-    n_epochs = 50
+    n_trajectories = 200  # Increased from 30 for better generalization
+    trajectory_length = 50  # Longer trajectories for more coverage
+    n_epochs = 100
     
     # Create simulator
     simulator = CalcinerSimulator(N_z=N_z, dt=dt)
@@ -86,10 +87,29 @@ def main():
         'model_class': model.__class__.__name__,
         'N_z': N_z,
         'dt': dt,
+        'history': history,
     }, save_path)
     
     print(f"\n✓ Saved model to {save_path}")
     print(f"✓ Final val loss: {history['val_loss'][-1]:.2e}")
+    
+    # Plot training curve
+    fig_path = Path(__file__).parent.parent / "figures" / "surrogate_training.png"
+    fig_path.parent.mkdir(exist_ok=True)
+    
+    plt.figure(figsize=(10, 6))
+    plt.semilogy(history['train_loss'], label='Train', linewidth=2)
+    plt.semilogy(history['val_loss'], label='Validation', linewidth=2)
+    plt.xlabel('Epoch', fontsize=12)
+    plt.ylabel('MSE Loss', fontsize=12)
+    plt.title('Surrogate Training', fontsize=14, fontweight='bold')
+    plt.legend(fontsize=11)
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.savefig(fig_path, dpi=150, facecolor='white')
+    plt.close()
+    print(f"✓ Saved training curve to {fig_path}")
+    
     print("=" * 70)
 
 

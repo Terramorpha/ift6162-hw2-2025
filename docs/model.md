@@ -145,29 +145,45 @@ The network takes as input:
 - Temperatures reshaped to $(2, N_z)$: solid and gas temperatures across cells
 - Control inputs broadcast to $(2, N_z)$: replicated across spatial cells
 
-For concentration prediction, the input tensor of shape $(9, N_z)$ passes through three convolutional layers with kernel size 3 and GELU activations, producing an output of shape $(5, N_z)$. Temperature prediction uses a parallel pathway with the same architecture. The outputs are flattened and concatenated to form the predicted residual.
+For concentration prediction, the input tensor of shape $(9, N_z)$ passes through three convolutional layers with kernel size 3, GELU activations, and 10% dropout for regularization. Temperature prediction uses a parallel pathway with the same architecture. The outputs are flattened and concatenated to form the predicted residual.
 
-This architecture has 261,000 parameters and respects the spatial locality of the PDE: neighboring cells interact through convolution kernels, matching the finite-volume discretization of the physics model.
+This architecture has 69,000 parameters and respects the spatial locality of the PDE: neighboring cells interact through convolution kernels, matching the finite-volume discretization of the physics model.
+
+### Training Data Generation
+
+We generate training data by simulating 200 trajectories of length 50, yielding 10,000 state transitions. Each trajectory starts from one of three initial condition modes:
+
+| Mode | Probability | Description |
+|------|-------------|-------------|
+| Cold start | 50% | Uniform low temperature (550-700 K), unreacted concentrations |
+| Warm front | 25% | Partial reaction front at random position along reactor |
+| Steady-state | 25% | Near-equilibrium profiles with spatial gradients |
+
+This diversity is critical: training only on near-steady-state data yields a surrogate that fails catastrophically on cold-start transients (1468% error). Including cold starts and reaction fronts reduces error to 18.8% on challenging 80-step rollouts with time-varying controls.
+
+At each trajectory step, we apply a slowly varying random control sequence with occasional jumps, providing coverage of the operating region.
 
 ### Training Procedure
 
-We generate training data by simulating 30 trajectories of length 30, yielding 900 state transitions. At each trajectory, we sample a random initial state and apply a slowly varying random control sequence with occasional jumps. This provides coverage of the operating region without requiring exhaustive sampling.
-
-The network is trained for 50 epochs using the AdamW optimizer with learning rate $10^{-3}$ and weight decay $10^{-5}$. The loss function is mean squared error between predicted and true next states in normalized coordinates:
+The network is trained for 100 epochs using the AdamW optimizer with learning rate $10^{-3}$ and weight decay $10^{-5}$. The loss function is mean squared error between predicted and true next states in normalized coordinates:
 
 $$
 \mathcal{L}(\theta) = \frac{1}{N} \sum_{i=1}^{N} \| f_\theta(\tilde{x}_i, \tilde{u}_i) - \tilde{x}_{i+1} \|^2
 $$
 
-A cosine annealing schedule decays the learning rate to zero over the training run.
+A cosine annealing schedule decays the learning rate to zero over the training run. With 10,000 training samples and 69,000 parameters, the sample-to-parameter ratio is approximately 1:7, providing adequate coverage to avoid severe overfitting.
 
 ### Accuracy and Speedup
 
-On a held-out validation set, the surrogate achieves approximately 10% mean relative error over 20-step rollouts. While this error is not negligible, it is sufficient for MPC: the controller replans at each time step, and the physics simulator provides ground-truth feedback for closed-loop correction.
+On challenging evaluations with cold-start initial conditions and time-varying controls, the surrogate achieves approximately 19% mean relative error over 80-step rollouts. On near-steady-state conditions, error drops to under 1%. The error is concentrated at later timesteps and near the reactor outlet, where autoregressive prediction errors accumulate.
 
-The trained surrogate evaluates a 20-step rollout in 0.4 ms, compared to 25 ms per step for the physics simulator. This represents a 60× speedup, reducing MPC solve time from 30 seconds to under 0.5 seconds per control step.
+This accuracy is sufficient for MPC: the controller replans at each time step, and the physics simulator provides ground-truth feedback for closed-loop correction. The trained surrogate evaluates a 20-step rollout in 0.4 ms, compared to 25 ms per step for the physics simulator, representing a 60× speedup.
 
 ## Summary
 
-The flash calciner physics model captures the coupled mass and energy balances governing kaolinite dehydroxylation. The 140-dimensional state tracks concentrations of five species and temperatures of two phases across 20 spatial cells. A neural surrogate with spatially-aware architecture learns the discrete-time dynamics from 900 simulated transitions, achieving 60× speedup with sufficient accuracy for closed-loop MPC.
+The flash calciner physics model captures the coupled mass and energy balances governing kaolinite dehydroxylation. The 140-dimensional state tracks concentrations of five species and temperatures of two phases across 20 spatial cells.
+
+A neural surrogate with spatially-aware convolutional architecture learns the discrete-time dynamics from 10,000 simulated transitions. Critical to accuracy is training data diversity: including cold-start conditions, partial reaction fronts, and near-steady-state profiles reduces rollout error from catastrophic (1468% MRE) to acceptable (19% MRE) on challenging transient scenarios.
+
+The surrogate achieves 60× speedup over the physics simulator, enabling real-time MPC that achieves 93% kaolinite conversion while saving 67% energy compared to constant-temperature operation.
 

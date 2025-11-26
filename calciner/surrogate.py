@@ -80,22 +80,71 @@ class CalcinerSimulator:
             x_traj[t + 1] = x
         return x_traj
     
-    def sample_random_state(self) -> np.ndarray:
+    def sample_random_state(self, mode: str = 'random') -> np.ndarray:
+        """
+        Sample a random initial state.
+        
+        Modes:
+        - 'cold': Cold start (uniform low temperature, unreacted)
+        - 'warm': Partially reacted with gradients
+        - 'steady': Near steady-state profile
+        - 'random': Random mix of all modes
+        """
+        if mode == 'random':
+            mode = np.random.choice(['cold', 'cold', 'warm', 'steady'])  # Bias toward cold
+        
         c = np.zeros((N_SPECIES, self.N_z))
-        c[0, :] = np.random.uniform(0.01, 0.20, self.N_z) * np.linspace(1, 0.1, self.N_z)
-        c[1, :] = np.random.uniform(0.5, 1.0, self.N_z)
-        c[2, :] = np.random.uniform(0.1, 0.5, self.N_z) * np.linspace(0.1, 1, self.N_z)
-        c[3, :] = np.random.uniform(4.0, 8.0, self.N_z)
-        c[4, :] = np.random.uniform(2.0, 6.0, self.N_z) * np.linspace(1, 1.5, self.N_z)
-        
         z = np.linspace(0, 1, self.N_z)
-        T_s_in = np.random.uniform(600, 750)
-        T_s_out = np.random.uniform(900, 1100)
-        T_s = T_s_in + (T_s_out - T_s_in) * (1 - np.exp(-3*z))
         
-        T_g_in = np.random.uniform(1100, 1350)
-        T_g_out = np.random.uniform(900, 1100)
-        T_g = T_g_in + (T_g_out - T_g_in) * z
+        if mode == 'cold':
+            # Cold start: uniform concentrations, uniform low temperature
+            # Matches paper initial conditions
+            c[0, :] = np.random.uniform(0.05, 0.15)  # Kaolinite (unreacted)
+            c[1, :] = np.random.uniform(0.05, 0.15)  # Quartz
+            c[2, :] = np.random.uniform(0.05, 0.15)  # Metakaolin (low)
+            c[3, :] = np.random.uniform(15, 20)      # N2 (high, like paper's 19.65)
+            c[4, :] = np.random.uniform(0.05, 0.15)  # H2O (low)
+            
+            T_base = np.random.uniform(550, 700)
+            T_s = np.ones(self.N_z) * T_base
+            T_g = np.ones(self.N_z) * T_base
+            
+        elif mode == 'warm':
+            # Partially reacted: reaction front at random position
+            front_pos = np.random.uniform(0.2, 0.8)
+            front_width = np.random.uniform(0.1, 0.3)
+            reaction_progress = 0.5 * (1 + np.tanh((z - front_pos) / front_width))
+            
+            c_kao_in = np.random.uniform(0.1, 0.2)
+            c[0, :] = c_kao_in * (1 - reaction_progress)  # Kaolinite depletes
+            c[1, :] = np.random.uniform(0.5, 1.0)          # Quartz constant
+            c[2, :] = c_kao_in * reaction_progress         # Metakaolin forms
+            c[3, :] = np.random.uniform(5, 10)             # N2
+            c[4, :] = 2 * c_kao_in * reaction_progress + 0.1  # H2O produced
+            
+            T_s_cold = np.random.uniform(600, 700)
+            T_s_hot = np.random.uniform(900, 1100)
+            T_s = T_s_cold + (T_s_hot - T_s_cold) * reaction_progress
+            
+            T_g_hot = np.random.uniform(1100, 1300)
+            T_g_cold = np.random.uniform(900, 1000)
+            T_g = T_g_hot + (T_g_cold - T_g_hot) * z
+            
+        else:  # steady
+            # Near steady-state profile (original behavior)
+            c[0, :] = np.random.uniform(0.01, 0.20, self.N_z) * np.linspace(1, 0.1, self.N_z)
+            c[1, :] = np.random.uniform(0.5, 1.0, self.N_z)
+            c[2, :] = np.random.uniform(0.1, 0.5, self.N_z) * np.linspace(0.1, 1, self.N_z)
+            c[3, :] = np.random.uniform(4.0, 8.0, self.N_z)
+            c[4, :] = np.random.uniform(2.0, 6.0, self.N_z) * np.linspace(1, 1.5, self.N_z)
+            
+            T_s_in = np.random.uniform(600, 750)
+            T_s_out = np.random.uniform(900, 1100)
+            T_s = T_s_in + (T_s_out - T_s_in) * (1 - np.exp(-3*z))
+            
+            T_g_in = np.random.uniform(1100, 1350)
+            T_g_out = np.random.uniform(900, 1100)
+            T_g = T_g_in + (T_g_out - T_g_in) * z
         
         return self.state_to_vector(c, T_s, T_g)
     
@@ -246,7 +295,7 @@ class MLPDynamics(nn.Module):
 class SpatiallyAwareDynamics(nn.Module):
     """Architecture that respects spatial structure of the PDE."""
     
-    def __init__(self, N_z: int = 20, hidden_dim: int = 256, n_species: int = 5):
+    def __init__(self, N_z: int = 20, hidden_dim: int = 128, n_species: int = 5, dropout: float = 0.1):
         super().__init__()
         
         self.N_z = N_z
@@ -255,20 +304,26 @@ class SpatiallyAwareDynamics(nn.Module):
         self.temp_dim = 2 * N_z
         self.state_dim = self.conc_dim + self.temp_dim
         self.control_dim = 2
+        self.dropout = dropout
         
+        # Reduced hidden_dim from 256 to 128 for fewer parameters
         self.conc_conv = nn.Sequential(
             nn.Conv1d(n_species + 2 + 2, hidden_dim, kernel_size=3, padding=1),
             nn.GELU(),
+            nn.Dropout1d(dropout),
             nn.Conv1d(hidden_dim, hidden_dim, kernel_size=3, padding=1),
             nn.GELU(),
+            nn.Dropout1d(dropout),
             nn.Conv1d(hidden_dim, n_species, kernel_size=3, padding=1),
         )
         
         self.temp_conv = nn.Sequential(
             nn.Conv1d(2 + n_species + 2, hidden_dim // 2, kernel_size=3, padding=1),
             nn.GELU(),
+            nn.Dropout1d(dropout),
             nn.Conv1d(hidden_dim // 2, hidden_dim // 2, kernel_size=3, padding=1),
             nn.GELU(),
+            nn.Dropout1d(dropout),
             nn.Conv1d(hidden_dim // 2, 2, kernel_size=3, padding=1),
         )
         
