@@ -26,11 +26,35 @@ Read `docs/model.md` for a complete description of the flash calciner physics. T
 
 ### Environment
 
-The simplified environment models conversion as a first-order lag system:
+#### Simplified Dynamics Model
 
-$$\alpha_{k+1} = a \cdot \alpha_k + (1-a) \cdot \alpha_{ss}(u_k)$$
+The full flash calciner involves coupled PDEs for mass and energy transport across 20 spatial cells (see `docs/model.md`). For Part 1, we abstract this to a scalar system that captures the essential control challenge.
 
-where $\alpha_{ss}(u)$ is a sigmoidal steady-state conversion function.
+The **outlet conversion** $\alpha \in [0,1]$ (fraction of kaolinite converted to metakaolin) evolves as a first-order lag approaching a temperature-dependent equilibrium:
+
+$$\alpha_{k+1} = e^{-\Delta t/\tau} \alpha_k + (1 - e^{-\Delta t/\tau}) \, \alpha_{ss}(u_k)$$
+
+where:
+- $\tau = 2$ s is the thermal time constant (how fast the reactor responds to temperature changes)
+- $\Delta t = 0.5$ s is the control period
+- $\alpha_{ss}(u)$ is the steady-state conversion at gas inlet temperature $u$
+
+The steady-state conversion follows a **sigmoidal Arrhenius-like relationship**:
+
+$$\alpha_{ss}(T) = \frac{0.999}{1 + \exp(-0.025 \cdot (T - 1000))}$$
+
+This captures the physics: reaction rate increases exponentially with temperature (Arrhenius), but conversion saturates near 100%. At $T = 900$ K, $\alpha_{ss} \approx 50\%$; at $T = 1261$ K, $\alpha_{ss} \approx 99.8\%$.
+
+#### Why This Simplification?
+
+The first-order model is a **linear approximation around the dominant eigenvalue** of the linearized PDE system. It preserves:
+1. The fundamental tradeoff: higher $T$ → faster conversion but more energy
+2. Temporal dynamics: the system doesn't respond instantaneously
+3. The constraint satisfaction problem: track a time-varying $\alpha_{min}(t)$
+
+What it ignores: spatial profiles, species concentrations, solid/gas temperature differences. You'll tackle those in Part 2.
+
+#### Environment API
 
 ```python
 from calciner import CalcinerEnv
@@ -40,17 +64,20 @@ obs = env.reset()  # Returns [alpha, alpha_min, t/T]
 obs, reward, done, info = env.step(action)  # action = T_g_in in [900, 1300]
 ```
 
-**State space** (3D):
-- `alpha`: Current conversion fraction $\in [0, 1]$
-- `alpha_min`: Target minimum conversion (time-varying)
-- `t/T`: Normalized time in episode
+**State space** $\mathcal{S} \subset \mathbb{R}^3$:
+| Component | Description | Range |
+|-----------|-------------|-------|
+| $\alpha$ | Current outlet conversion | $[0, 1]$ |
+| $\alpha_{min}$ | Target minimum (constraint) | $[0.90, 0.99]$ |
+| $t/T$ | Normalized episode time | $[0, 1]$ |
 
-**Action space** (1D continuous):
-- `T_g_in`: Gas inlet temperature $\in [900, 1300]$ K
+**Action space** $\mathcal{A} \subset \mathbb{R}$:
+- $u = T_{g,in}$: Gas inlet temperature in $[900, 1300]$ K
 
-**Reward**:
-- Negative heater power (energy cost)
-- Quadratic penalty when $\alpha < \alpha_{min}$
+**Reward function**:
+$$r(s, a) = -\underbrace{c \cdot (T_{g,in} - 300)}_{\text{energy cost}} - \underbrace{10 \cdot \max(0, \alpha_{min} - \alpha)^2}_{\text{constraint violation}}$$
+
+The energy cost is linear in temperature (heating gas from ambient). The constraint penalty is a soft barrier—you can violate $\alpha_{min}$ but it's expensive. This is a **constrained MDP** relaxed via penalty methods.
 
 ### Tasks
 
