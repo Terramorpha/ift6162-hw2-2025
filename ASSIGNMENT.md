@@ -13,6 +13,8 @@ This is a constrained control problem with continuous actions. You'll implement 
 
 **Setup**: Run `python scripts/demo.py` to test environments. See `docs/model.md` for physics background.
 
+**Physics model**: Based on Cantisani et al., "Dynamic modeling and simulation of a flash clay calciner" (2018). The physics implementation is reproduced from the paper at https://github.com/pierrelux/flash-clay-calciner—this assignment adds control on top of that dynamics model.
+
 ## Logistics
 
 You may work in teams of up to 3 people. All team members must understand the solution and code. We may conduct individual interview checkups where you'll be asked to explain your implementation choices, algorithm details, and results. If you worked in a team and cannot explain your own code, you will receive a reduced grade.
