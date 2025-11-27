@@ -11,14 +11,43 @@ The assignment has two parts:
 | **Part 1** | Simplified 1D dynamics | 3 | REINFORCE, PPO, TD3 |
 | **Part 2** | Full PDE-based dynamics | 140 | Scale up your best algorithm |
 
-## Background
+## Background: The Chemistry
 
-Read `docs/model.md` for a complete description of the flash calciner physics. The key points are:
+### What is Kaolinite?
 
-- **Reaction**: Kaolinite (clay) → Metakaolin + Water vapor (endothermic)
-- **Control input**: Gas inlet temperature $T_{g,in} \in [900, 1300]$ K
-- **Objective**: Maximize conversion $\alpha$ while minimizing heater power
-- **Constraint**: Maintain $\alpha \geq \alpha_{min}$ (time-varying target)
+**Kaolinite** (Al₂Si₂O₅(OH)₄) is a clay mineral—the most common component of kaolin clay, used in ceramics, paper, and cement production. Its crystal structure contains hydroxyl groups (OH) that can be removed by heating.
+
+**Metakaolin** (Al₂Si₂O₇) is the dehydroxylated product—a highly reactive pozzolan used in high-performance concrete. The transformation is:
+
+$$\text{Al}_2\text{Si}_2\text{O}_5(\text{OH})_4 \xrightarrow{\text{heat}} \text{Al}_2\text{Si}_2\text{O}_7 + 2\text{H}_2\text{O}$$
+
+This **dehydroxylation** is endothermic (requires energy input) and occurs at 450-850°C. The reaction consumes heat, which must be supplied by hot gas.
+
+### What is a "Species"?
+
+In chemical engineering, a **species** is a distinct chemical compound. The flash calciner tracks 5 species:
+
+| Index | Species | Phase | Description |
+|-------|---------|-------|-------------|
+| 0 | Kaolinite (reactant) | Solid | The clay we're converting |
+| 1 | Quartz | Solid | Inert impurity (SiO₂) |
+| 2 | Metakaolin (product) | Solid | What we want to produce |
+| 3 | N₂ (carrier gas) | Gas | Inert, provides convection |
+| 4 | H₂O (water vapor) | Gas | Released by reaction |
+
+The reactor is a 10m vertical tube where solid particles fall downward while hot gas flows upward (counter-current). We track the **concentration** (mol/m³) of each species at 20 positions along the reactor length.
+
+### Control Objective
+
+**Conversion** $\alpha$ is the fraction of kaolinite that has reacted:
+
+$$\alpha = 1 - \frac{c_{\text{kaolinite, outlet}}}{c_{\text{kaolinite, inlet}}}$$
+
+The control problem: supply enough heat (via $T_{g,in}$) to achieve target conversion $\alpha_{min}$ while minimizing energy cost. Too cold → incomplete reaction; too hot → wasted energy.
+
+Read `docs/model.md` for the full PDE-based physics model.
+
+---
 
 ---
 
@@ -46,10 +75,16 @@ The steady-state conversion follows a **sigmoidal Arrhenius-like relationship**:
 $$\alpha_{ss}(T) = \frac{0.999}{1 + \exp(-0.025 \cdot (T - 1000))}$$
 
 This captures two key physics phenomena:
-1. **Arrhenius kinetics**: Reaction rate (and thus conversion) increases exponentially with temperature
-2. **Saturation**: Conversion cannot exceed 100%, so it approaches an asymptote
 
-Numerically: $\alpha_{ss}(900\text{K}) \approx 50\%$, $\alpha_{ss}(1000\text{K}) \approx 73\%$, $\alpha_{ss}(1261\text{K}) \approx 99.8\%$. The inflection point at $T = 1000$ K corresponds to the temperature where the reaction becomes kinetically favorable.
+1. **Arrhenius kinetics**: Reaction rate increases exponentially with temperature according to
+   $$k(T) = A \exp\left(-\frac{E_a}{RT}\right)$$
+   where $E_a$ is the activation energy barrier. At low temperatures, most molecular collisions lack sufficient energy to break the hydroxyl bonds. As $T$ increases, more collisions succeed → faster reaction → higher equilibrium conversion.
+
+2. **Saturation**: Conversion cannot exceed 100% (can't convert more kaolinite than you have), so $\alpha_{ss}(T)$ approaches an asymptote near 1.
+
+Numerically: $\alpha_{ss}(900\text{K}) \approx 50\%$, $\alpha_{ss}(1000\text{K}) \approx 73\%$, $\alpha_{ss}(1261\text{K}) \approx 99.8\%$. 
+
+The inflection point at $T = 1000$ K is where the sigmoid transitions from "slow reaction" to "fast reaction" regimes. Below this temperature, the reactor residence time isn't long enough for particles to fully react; above it, kinetics are fast enough that most particles convert before exiting.
 
 #### Why This Simplification?
 
