@@ -1,6 +1,6 @@
 # Assignment: Deep RL for Flash Calciner Control
 
-Control an industrial reactor that converts clay to metakaolin by heating. You control gas inlet temperature $T_{g,in} \in [900, 1300]$ K. Higher temperatures speed up the reaction but waste energy. The goal: achieve target conversion $\alpha \geq \alpha_{min}$ while minimizing heater power.
+Control an industrial reactor that converts clay to metakaolin by heating. You control gas inlet temperature $T_{g,in} \in [900, 1300]$ K. Higher temperatures speed up the reaction but waste energy. Achieve target conversion $\alpha \geq \alpha_{min}$ while minimizing heater power.
 
 | Part | State | Task |
 |------|-------|------|
@@ -17,7 +17,7 @@ $$\alpha_{k+1} = e^{-\Delta t/\tau} \alpha_k + (1 - e^{-\Delta t/\tau}) \, \alph
 
 where $\tau = 2$ s, $\Delta t = 0.5$ s, and the steady-state conversion $\alpha_{ss}(T) = 0.999/(1 + \exp(-0.025(T - 1000)))$ captures Arrhenius kinetics. Low temperatures give ~50% conversion; high temperatures approach 100%.
 
-**Environment**: State is $[\alpha, \alpha_{min}, t/T] \in \mathbb{R}^3$. Action is $T_{g,in} \in [900, 1300]$ K. Reward is $-\text{energy} - 10 \cdot \max(0, \alpha_{min} - \alpha)^2$.
+The environment provides state $[\alpha, \alpha_{min}, t/T] \in \mathbb{R}^3$ where the first component is current conversion, the second is the target threshold, and the third is normalized episode time. Action is $T_{g,in} \in [900, 1300]$ K. Reward is $-\text{energy} - 10 \cdot \max(0, \alpha_{min} - \alpha)^2$.
 
 Implement three algorithms:
 
@@ -35,11 +35,9 @@ Compare all three against `ConstantTemperatureController(T_g_in=1261)` baseline.
 
 The full state tracks 5 species + 2 temperatures across 20 spatial cells (140D). Physics simulation is too slow (~25 ms/step) for RL. We provide a neural surrogate (60× faster, 19% error) wrapped in `SurrogateCalcinerEnv`.
 
-**Algorithm** (25 pts): Adapt your best Part 1 algorithm to 140D. You'll need a neural network policy—linear won't work. Should you use fully-connected layers or 1D convolutions to capture spatial structure? Start simple: just look at outlet conversion, then incorporate spatial profiles.
+Adapt your best Part 1 algorithm to work with the 140-dimensional state (25 pts). You'll need a neural network policy—linear won't work. Should you use fully-connected layers or 1D convolutions to capture spatial structure? Start simple: just look at outlet conversion, then incorporate spatial profiles.
 
-**Evaluation** (15 pts): Validate on the true physics simulator (`CalcinerSimulator`), not just the surrogate. Report energy and violations. Visualize spatial profiles—does the policy create smooth gradients?
-
-The surrogate is differentiable if you want to exploit that.
+Validate on the true physics simulator (`CalcinerSimulator`), not just the surrogate (15 pts). Report energy and violations. Visualize spatial profiles—does the policy create smooth gradients? The surrogate is differentiable if you want to exploit that.
 
 ---
 
