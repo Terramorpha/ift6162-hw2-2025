@@ -15,7 +15,7 @@ This is a constrained control problem with continuous actions. You'll implement 
 
 ## Logistics
 
-You may work in teams of up to 3 people. All team members must understand the solution and code—we may conduct individual interview checkups where you'll be asked to explain your implementation choices, algorithm details, and results. If you worked in a team and cannot explain your own code, you will receive a reduced grade.
+You may work in teams of up to 3 people. All team members must understand the solution and code. We may conduct individual interview checkups where you'll be asked to explain your implementation choices, algorithm details, and results. If you worked in a team and cannot explain your own code, you will receive a reduced grade.
 
 ## Part 1: Simplified Problem (50 points)
 
