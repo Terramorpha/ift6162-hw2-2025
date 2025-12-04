@@ -1,46 +1,19 @@
+from dataclasses import dataclass
 from typing import Optional
 
 import torch
 import torch.nn as nn
 from torch import Tensor
 
-from hw2 import Critic, Trajectory, sample_trajectory, MLP
+from hw2 import Critic, Trajectory, sample_trajectory
 
 
-class MLPActorCritic(nn.Module):
-    def __init__(self, depth: int, width: int):
-        super().__init__()
-        self.trunk = MLP(
-            input_size=3,
-            output_size=width,
-            width=width,
-            depth=depth,
-        )
-
-        self.actor_head = nn.Linear(width, 2)
-        self.critic_head = nn.Linear(width, 1)
-
-    def action_dist(self, obs: torch.Tensor):
-        from torch.distributions import (
-            AffineTransform,
-            Normal,
-            TanhTransform,
-            TransformedDistribution,
-        )
-
-        features = self.trunk(obs)
-        mean_log_std = self.actor_head(features)
-        mean = torch.clamp(mean_log_std[:, 0], -3, 3)
-        log_std = torch.clamp(mean_log_std[:, 1], -5, 2)
-        std = torch.exp(log_std)
-        return TransformedDistribution(
-            Normal(mean, std),
-            [TanhTransform(), AffineTransform(0.5, 0.5)],
-        )
-
-    def value(self, obs: torch.Tensor) -> torch.Tensor:
-        features = self.trunk(obs)
-        return self.critic_head(features)
+@dataclass
+class PPOTrainingResult:
+    model: nn.Module
+    mean_rewards: list[float]
+    critic_losses: list[float]
+    policy_losses: list[float]
 
 
 def compute_residuals(critic, traj: Trajectory, γ: float) -> Tensor:
@@ -90,6 +63,7 @@ def ppo_loss(
     )
 
     log_ratio = model_log_probs - sampling_log_probs
+    log_ratio = torch.clamp(log_ratio, -20, 20)
     ratios = torch.exp(log_ratio)
 
     clipped_ratios = torch.clamp(ratios, 1 - ε, 1 + ε)
@@ -116,25 +90,33 @@ def train_ppo(
     max_iterations: int = 200,
     seed: Optional[int] = None,
     verbose: bool = True,
-) -> nn.Module:
+) -> PPOTrainingResult:
     if seed is not None:
         torch.manual_seed(seed)
 
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
 
-    critic_loss = None
-    policy_loss = None
+    mean_rewards_history = []
+    critic_losses_history = []
+    policy_losses_history = []
 
     for epoch in range(max_iterations):
         trajs = [sample_trajectory(env, model).detach() for _ in range(batch_size)]  # type: ignore
 
         all_rewards = torch.stack([t.rewards for t in trajs])
+        mean_reward = all_rewards.mean().item()
+        mean_rewards_history.append(mean_reward)
+
         if verbose:
-            print(f"Iteration {epoch}, mean reward: {all_rewards.mean().item():.4f}")
+            print(f"Iteration {epoch}, mean reward: {mean_reward:.4f}")
+
+        critic_loss_val = 0.0
+        policy_loss_val = 0.0
 
         for k in range(n_epochs):
             value_losses = [td_loss(model, traj, γ) for traj in trajs]
             critic_loss = torch.stack(value_losses).mean()
+            critic_loss_val = critic_loss.item()
 
             optimizer.zero_grad()
             critic_loss.backward()
@@ -142,20 +124,22 @@ def train_ppo(
 
             policy_losses = [ppo_loss(model, traj, γ, λ=λ) for traj in trajs]
             policy_loss = torch.stack(policy_losses).mean()
+            policy_loss_val = policy_loss.item()
 
             optimizer.zero_grad()
             policy_loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=0.5)
             optimizer.step()
 
-        if (
-            verbose
-            and epoch % 10 == 0
-            and critic_loss is not None
-            and policy_loss is not None
-        ):
-            print(
-                f"  critic: {critic_loss.item():.2f}, policy: {policy_loss.item():.4f}"
-            )
+        critic_losses_history.append(critic_loss_val)
+        policy_losses_history.append(policy_loss_val)
 
-    return model
+        if verbose and epoch % 10 == 0:
+            print(f"  critic: {critic_loss_val:.2f}, policy: {policy_loss_val:.4f}")
+
+    return PPOTrainingResult(
+        model=model,
+        mean_rewards=mean_rewards_history,
+        critic_losses=critic_losses_history,
+        policy_losses=policy_losses_history,
+    )

@@ -53,6 +53,16 @@ class SurrogateCalcinerEnv:
         
         self.t = 0
         self.state = None
+    
+    @property
+    def u_min(self) -> float:
+        """Alias for T_g_min to match CalcinerEnv interface."""
+        return self.T_g_min
+    
+    @property
+    def u_max(self) -> float:
+        """Alias for T_g_max to match CalcinerEnv interface."""
+        return self.T_g_max
         
     def reset(self, seed: Optional[int] = None) -> np.ndarray:
         """

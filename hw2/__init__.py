@@ -72,7 +72,7 @@ def sample_trajectory(env, policy) -> Trajectory:
 
     done = False
     while not done:
-        torch_obs = torch.from_numpy(obs)
+        torch_obs = torch.from_numpy(obs).float()
 
         observations.append(torch_obs)
 
@@ -94,8 +94,8 @@ def sample_trajectory(env, policy) -> Trajectory:
             observations=torch.stack(observations),
             actions=torch.stack(actions),
             log_probs=torch.stack(log_probs),
-            rewards=Tensor(rewards),
-            final_observation=Tensor(obs),
+            rewards=torch.tensor(rewards, dtype=torch.float32),
+            final_observation=torch.from_numpy(obs).float(),
         )
 
 

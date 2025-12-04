@@ -1,14 +1,49 @@
+import torch
+import torch.nn as nn
+from torch.distributions import (
+    AffineTransform,
+    Distribution,
+    Normal,
+    TanhTransform,
+    TransformedDistribution,
+)
+
 from calciner import CalcinerEnv
-from hw2.ppo import MLPActorCritic, train_ppo
-from hw2.reinforce import MLPPolicy, train_reinforce
-from hw2.td3 import DeterministicActorMLP, QCriticMLP, train_td3
+from hw2 import MLP
+from hw2.ppo import train_ppo
+from hw2.reinforce import train_reinforce
+from hw2.td3 import train_td3
+
+
+class MLPPolicy(nn.Module):
+    def __init__(self, obs_dim: int, depth: int, width: int):
+        super().__init__()
+        self.mlp = MLP(
+            input_size=obs_dim,
+            output_size=2,
+            width=width,
+            depth=depth,
+        )
+
+    def action_dist(self, obs: torch.Tensor) -> Distribution:
+        batch, _ = obs.shape
+
+        mean_log_std = self.mlp(obs)
+        mean = torch.clamp(mean_log_std[:, 0], -3, 3)
+        log_std = torch.clamp(mean_log_std[:, 1], -5, 2)
+        std = torch.exp(log_std)
+        return TransformedDistribution(
+            Normal(mean, std),
+            [TanhTransform(), AffineTransform(0.5, 0.5)],
+        )
 
 
 def train_reinforce_simple(seed=0):
     env = CalcinerEnv()
-    policy = MLPPolicy(depth=2, width=32)
+    obs_dim = env.reset().shape[0]
+    policy = MLPPolicy(obs_dim=obs_dim, depth=2, width=32)
 
-    trained_policy = train_reinforce(
+    result = train_reinforce(
         env,
         policy,
         batch_size=64,
@@ -18,14 +53,50 @@ def train_reinforce_simple(seed=0):
         verbose=True,
     )
 
-    return trained_policy
+    return result
+
+
+class MLPActorCritic(nn.Module):
+    def __init__(self, obs_dim: int, depth: int, width: int):
+        super().__init__()
+        self.trunk = MLP(
+            input_size=obs_dim,
+            output_size=width,
+            width=width,
+            depth=depth,
+        )
+
+        self.actor_head = nn.Linear(width, 2)
+        self.critic_head = nn.Linear(width, 1)
+
+        for m in self.modules():
+            if isinstance(m, nn.Linear):
+                nn.init.orthogonal_(m.weight, gain=0.01)
+                if m.bias is not None:
+                    nn.init.constant_(m.bias, 0)
+
+    def action_dist(self, obs: torch.Tensor):
+        features = self.trunk(obs)
+        mean_log_std = self.actor_head(features)
+        mean = torch.clamp(mean_log_std[:, 0], -3, 3)
+        log_std = torch.clamp(mean_log_std[:, 1], -5, 2)
+        std = torch.exp(log_std)
+        return TransformedDistribution(
+            Normal(mean, std),
+            [TanhTransform(), AffineTransform(0.5, 0.5)],
+        )
+
+    def value(self, obs: torch.Tensor) -> torch.Tensor:
+        features = self.trunk(obs)
+        return self.critic_head(features)
 
 
 def train_ppo_simple(seed=0):
     env = CalcinerEnv()
-    model = MLPActorCritic(depth=3, width=8)
+    obs_dim = env.reset().shape[0]
+    model = MLPActorCritic(obs_dim=obs_dim, depth=3, width=8)
 
-    trained_model = train_ppo(
+    result = train_ppo(
         env,
         model,
         batch_size=64,
@@ -38,17 +109,49 @@ def train_ppo_simple(seed=0):
         verbose=True,
     )
 
-    return trained_model
+    return result
+
+
+class DeterministicActorMLP(nn.Module):
+    def __init__(self, obs_dim: int, depth: int, width: int):
+        super().__init__()
+
+        self.mlp = MLP(
+            obs_dim,
+            1,
+            width,
+            depth,
+        )
+
+    def action(self, obs: torch.Tensor, /) -> torch.Tensor:
+        return torch.sigmoid(self.mlp(obs))
+
+
+class QCriticMLP(nn.Module):
+    def __init__(self, obs_dim: int, depth: int, width: int):
+        super().__init__()
+
+        self.mlp = MLP(
+            input_size=obs_dim + 1,
+            output_size=1,
+            width=width,
+            depth=depth,
+        )
+
+    def q_value(self, obs: torch.Tensor, action: torch.Tensor) -> torch.Tensor:
+        concat = torch.concatenate([obs, action], dim=-1)
+        return self.mlp(concat)
 
 
 def train_td3_simple(seed=0):
     env = CalcinerEnv()
+    obs_dim = env.reset().shape[0]
 
-    actor = DeterministicActorMLP(depth=3, width=16)
-    critic_1 = QCriticMLP(depth=3, width=16)
-    critic_2 = QCriticMLP(depth=3, width=16)
+    actor = DeterministicActorMLP(obs_dim=obs_dim, depth=3, width=16)
+    critic_1 = QCriticMLP(obs_dim=obs_dim, depth=3, width=16)
+    critic_2 = QCriticMLP(obs_dim=obs_dim, depth=3, width=16)
 
-    trained_actor, trained_critic_1, trained_critic_2 = train_td3(
+    result = train_td3(
         env,
         actor,
         critic_1,
@@ -65,7 +168,7 @@ def train_td3_simple(seed=0):
         verbose=True,
     )
 
-    return trained_actor, trained_critic_1, trained_critic_2
+    return result
 
 
 if __name__ == "__main__":
@@ -79,16 +182,20 @@ if __name__ == "__main__":
 
     if algorithm == "reinforce":
         print("Training REINFORCE...")
-        policy = train_reinforce_simple()
+        result = train_reinforce_simple()
         print("Training complete!")
+        print(f"Final mean reward: {result.mean_rewards[-1]:.4f}")
     elif algorithm == "ppo":
         print("Training PPO...")
-        model = train_ppo_simple()
+        result = train_ppo_simple()
         print("Training complete!")
+        print(f"Final mean reward: {result.mean_rewards[-1]:.4f}")
     elif algorithm == "td3":
         print("Training TD3...")
-        actor, critic_1, critic_2 = train_td3_simple()
+        result = train_td3_simple()
         print("Training complete!")
+        print(f"Final mean reward: {result.mean_rewards[-1]:.4f}")
+        print(f"Best reward: {result.best_rewards[-1]:.4f}")
     else:
         print(f"Unknown algorithm: {algorithm}")
         print("Available: reinforce, ppo, td3")

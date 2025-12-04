@@ -9,48 +9,18 @@ import torch
 import torch.nn as nn
 from torch import Tensor
 
-from hw2 import Trajectory, MLP
+from hw2 import Trajectory
 
 
-class DeterministicActorMLP(nn.Module):
-    mlp: MLP
-
-    def __init__(self, depth, width):
-        super().__init__()
-
-        self.mlp = MLP(
-            3,
-            1,
-            width,
-            depth,
-        )
-
-    def action(self, obs: torch.Tensor, /) -> torch.Tensor:
-        _, _ = obs.shape
-
-        return torch.sigmoid(self.mlp(obs))
-
-
-class QCriticMLP(nn.Module):
-    mlp: MLP
-
-    def __init__(self, depth, width):
-        super().__init__()
-
-        self.mlp = MLP(
-            input_size=4,
-            output_size=1,
-            width=width,
-            depth=depth,
-        )
-
-    def q_value(self, obs: Tensor, action: Tensor) -> Tensor:
-        _, _ = obs.shape
-        _, _ = action.shape
-
-        concat = torch.concatenate([obs, action], dim=-1)
-
-        return self.mlp(concat)
+@dataclass
+class TD3TrainingResult:
+    actor: nn.Module
+    critic_1: nn.Module
+    critic_2: nn.Module
+    mean_rewards: list[float]
+    best_rewards: list[float]
+    critic_losses: list[float]
+    actor_losses: list[float]
 
 
 @dataclass
@@ -174,7 +144,7 @@ def train_td3(
     policy_delay: int = 2,
     seed: Optional[int] = None,
     verbose: bool = True,
-) -> tuple[nn.Module, nn.Module, nn.Module]:
+) -> TD3TrainingResult:
     if seed is not None:
         torch.manual_seed(seed)
         np.random.seed(seed)
@@ -191,6 +161,11 @@ def train_td3(
     replay_buffer = ReplayBuffer(buffer_size)
     best_reward = -float("inf")
 
+    mean_rewards_history = []
+    best_rewards_history = []
+    critic_losses_history = []
+    actor_losses_history = []
+
     for epoch in range(max_epochs):
         current_noise = exploration_noise * max(0.05, 1.0 - epoch / 1000)
 
@@ -204,27 +179,36 @@ def train_td3(
         trajs = replay_buffer.sample(batch_size)
 
         mean_reward = torch.stack([t.rewards.mean() for t in trajs]).mean().item()
+        mean_rewards_history.append(mean_reward)
 
         if mean_reward > best_reward:
             best_reward = mean_reward
+        best_rewards_history.append(best_reward)
 
         if verbose and epoch % 100 == 0:
             print(f"Epoch {epoch}, mean: {mean_reward:.4f}, best: {best_reward:.4f}")
 
         if epoch < warmup_steps:
+            critic_losses_history.append(0.0)
+            actor_losses_history.append(0.0)
             continue
 
         target_q = MinQ(target_critic_1, target_critic_2)
 
+        critic_loss_val = 0.0
         for q_net, opt in [(critic_1, q1_opt), (critic_2, q2_opt)]:
             opt.zero_grad()
             loss = torch.stack(
                 [q_td_loss(q_net, target_q, target_actor, traj, γ) for traj in trajs]
             ).mean()
+            critic_loss_val = loss.item()
             loss.backward()
             torch.nn.utils.clip_grad_norm_(q_net.parameters(), max_norm=0.5)
             opt.step()
 
+        critic_losses_history.append(critic_loss_val)
+
+        actor_loss_val = 0.0
         if epoch % policy_delay == 0:
             actor_opt.zero_grad()
             loss = torch.stack(
@@ -233,6 +217,7 @@ def train_td3(
                     for traj in trajs
                 ]
             ).mean()
+            actor_loss_val = loss.item()
             loss.backward()
             torch.nn.utils.clip_grad_norm_(actor.parameters(), max_norm=0.5)
             actor_opt.step()
@@ -241,4 +226,14 @@ def train_td3(
             polyak_update(critic_1, target_critic_1)
             polyak_update(critic_2, target_critic_2)
 
-    return actor, critic_1, critic_2
+        actor_losses_history.append(actor_loss_val)
+
+    return TD3TrainingResult(
+        actor=actor,
+        critic_1=critic_1,
+        critic_2=critic_2,
+        mean_rewards=mean_rewards_history,
+        best_rewards=best_rewards_history,
+        critic_losses=critic_losses_history,
+        actor_losses=actor_losses_history,
+    )

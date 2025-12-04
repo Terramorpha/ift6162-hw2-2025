@@ -4,38 +4,15 @@ from typing import Optional
 import torch
 import torch.nn as nn
 from torch import Tensor
-from torch.distributions import (
-    AffineTransform,
-    Distribution,
-    Normal,
-    TanhTransform,
-    TransformedDistribution,
-)
 
-from hw2 import MLP, Trajectory, sample_trajectory
+from hw2 import Trajectory, sample_trajectory
 
 
-class MLPPolicy(nn.Module):
-    def __init__(self, depth: int, width: int):
-        super().__init__()
-        self.mlp = MLP(
-            input_size=3,
-            output_size=2,
-            width=width,
-            depth=depth,
-        )
-
-    def action_dist(self, obs: torch.Tensor) -> Distribution:
-        batch, _ = obs.shape
-
-        mean_log_std = self.mlp(obs)
-        mean = torch.clamp(mean_log_std[:, 0], -3, 3)
-        log_std = torch.clamp(mean_log_std[:, 1], -5, 2)
-        std = torch.exp(log_std)
-        return TransformedDistribution(
-            Normal(mean, std),
-            [TanhTransform(), AffineTransform(0.5, 0.5)],
-        )
+@dataclass
+class REINFORCETrainingResult:
+    policy: nn.Module
+    mean_rewards: list[float]
+    policy_losses: list[float]
 
 
 def policy_gradients_loss(traj: Trajectory) -> Tensor:
@@ -59,21 +36,28 @@ def train_reinforce(
     max_iterations: int = 200,
     seed: Optional[int] = None,
     verbose: bool = True,
-) -> nn.Module:
+) -> REINFORCETrainingResult:
     if seed is not None:
         torch.manual_seed(seed)
 
     optimizer = torch.optim.Adam(policy.parameters(), lr=lr)
 
+    mean_rewards_history = []
+    policy_losses_history = []
+
     for epoch in range(max_iterations):
         trajs = [sample_trajectory(env, policy) for _ in range(batch_size)]  # type: ignore
 
         all_rewards = torch.stack([t.rewards for t in trajs])
+        mean_reward = all_rewards.mean().item()
+        mean_rewards_history.append(mean_reward)
+
         if verbose:
-            print(f"Iteration {epoch}, mean reward: {all_rewards.mean().item():.4f}")
+            print(f"Iteration {epoch}, mean reward: {mean_reward:.4f}")
 
         losses = [policy_gradients_loss(traj) for traj in trajs]
         loss = torch.stack(losses).mean()
+        policy_losses_history.append(loss.item())
 
         optimizer.zero_grad()
         loss.backward()
@@ -82,4 +66,8 @@ def train_reinforce(
         if verbose and epoch % 10 == 0:
             print(f"  policy loss: {loss.item():.4f}")
 
-    return policy
+    return REINFORCETrainingResult(
+        policy=policy,
+        mean_rewards=mean_rewards_history,
+        policy_losses=policy_losses_history,
+    )
