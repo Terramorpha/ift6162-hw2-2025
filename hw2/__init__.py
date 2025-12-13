@@ -54,7 +54,7 @@ class Controller:
 
     def get_action(self, obs: np.ndarray) -> float:
         u_01 = (
-            self.policy.action_dist(torch.from_numpy(obs).unsqueeze(0))
+            self.policy.action_dist(torch.tensor(obs, dtype=torch.float32).unsqueeze(0))
             .sample()
             .squeeze(-1)
             .item()
@@ -72,7 +72,7 @@ def sample_trajectory(env, policy) -> Trajectory:
 
     done = False
     while not done:
-        torch_obs = torch.from_numpy(obs).float()
+        torch_obs = torch.tensor(obs, dtype=torch.float32)
 
         observations.append(torch_obs)
 
@@ -95,7 +95,7 @@ def sample_trajectory(env, policy) -> Trajectory:
             actions=torch.stack(actions),
             log_probs=torch.stack(log_probs),
             rewards=torch.tensor(rewards, dtype=torch.float32),
-            final_observation=torch.from_numpy(obs).float(),
+            final_observation=torch.tensor(obs, dtype=torch.float32),
         )
 
 
