@@ -52,15 +52,15 @@ def ppo_loss(
     γ: float,
     λ: float,
     ε: float = 0.2,
+    ent_coef: float = 0.01,
 ) -> Tensor:
     advantages = generalized_advantage_estimation(model, traj, γ, λ).detach()
 
     advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
 
     sampling_log_probs = traj.log_probs
-    model_log_probs = model.action_dist(traj.observations).log_prob(
-        traj.actions.squeeze(-1)
-    )
+    action_dist = model.action_dist(traj.observations)
+    model_log_probs = action_dist.log_prob(traj.actions.squeeze(-1))
 
     log_ratio = model_log_probs - sampling_log_probs
     log_ratio = torch.clamp(log_ratio, -20, 20)
@@ -70,12 +70,22 @@ def ppo_loss(
 
     policy_loss = -torch.min(ratios * advantages, clipped_ratios * advantages).mean()
 
-    return policy_loss
+    # This doesn't exist in general
+    # entropy = action_dist.entropy()
+    #
+    # Instead, we use an importance sampling method for approximating the
+    # current policy's entropy from the old policy's transitions.
+    try:
+        entropy = action_dist.entropy().mean()
+    except Exception as e:
+        entropy = -(ratios.detach() * model_log_probs).mean()
+
+    return policy_loss - ent_coef * entropy
 
 
 def td_loss(model, traj: Trajectory, γ: float) -> Tensor:
     residuals = compute_residuals(model, traj, γ)
-    return (residuals**2).sum()
+    return (residuals**2).mean()
 
 
 def train_ppo(
