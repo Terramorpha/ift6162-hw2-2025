@@ -100,6 +100,9 @@ def train_ppo(
     max_iterations: int = 200,
     seed: Optional[int] = None,
     verbose: bool = True,
+    ent_coef: float = 0.01,
+    plot_callback=None,
+    plot_interval: int = 50,
 ) -> PPOTrainingResult:
     if seed is not None:
         torch.manual_seed(seed)
@@ -132,7 +135,9 @@ def train_ppo(
             critic_loss.backward()
             optimizer.step()
 
-            policy_losses = [ppo_loss(model, traj, γ, λ=λ) for traj in trajs]
+            policy_losses = [
+                ppo_loss(model, traj, γ, λ=λ, ent_coef=ent_coef) for traj in trajs
+            ]
             policy_loss = torch.stack(policy_losses).mean()
             policy_loss_val = policy_loss.item()
 
@@ -146,6 +151,10 @@ def train_ppo(
 
         if verbose and epoch % 10 == 0:
             print(f"  critic: {critic_loss_val:.2f}, policy: {policy_loss_val:.4f}")
+
+        # Call plot callback if provided
+        if plot_callback is not None and epoch % plot_interval == 0:
+            plot_callback(model, epoch, env)
 
     return PPOTrainingResult(
         model=model,

@@ -36,6 +36,8 @@ def train_reinforce(
     max_iterations: int = 200,
     seed: Optional[int] = None,
     verbose: bool = True,
+    plot_callback=None,
+    plot_interval: int = 50,
 ) -> REINFORCETrainingResult:
     if seed is not None:
         torch.manual_seed(seed)
@@ -53,7 +55,7 @@ def train_reinforce(
         mean_rewards_history.append(mean_reward)
 
         if verbose:
-            print(f"Iteration {epoch}, mean reward: {mean_reward:.4f}")
+            print(f"Iteration {epoch}, mean reward: {mean_reward:.4f}", flush=True)
 
         losses = [policy_gradients_loss(traj) for traj in trajs]
         loss = torch.stack(losses).mean()
@@ -64,7 +66,11 @@ def train_reinforce(
         optimizer.step()
 
         if verbose and epoch % 10 == 0:
-            print(f"  policy loss: {loss.item():.4f}")
+            print(f"  policy loss: {loss.item():.4f}", flush=True)
+
+        # Call plot callback if provided
+        if plot_callback is not None and epoch % plot_interval == 0:
+            plot_callback(policy, epoch, env)
 
     return REINFORCETrainingResult(
         policy=policy,

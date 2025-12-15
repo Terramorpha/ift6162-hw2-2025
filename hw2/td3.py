@@ -91,7 +91,7 @@ def sample_trajectory_noisy(env, actor, noise_scale: float) -> Trajectory:
 
     done = False
     while not done:
-        torch_obs = torch.from_numpy(obs)
+        torch_obs = torch.tensor(obs, dtype=torch.float32)
         observations.append(torch_obs)
 
         with torch.no_grad():
@@ -109,8 +109,8 @@ def sample_trajectory_noisy(env, actor, noise_scale: float) -> Trajectory:
         observations=torch.stack(observations),
         actions=torch.stack(actions),
         log_probs=torch.ones(len(rewards)),
-        rewards=torch.tensor(rewards),
-        final_observation=torch.from_numpy(obs),
+        rewards=torch.tensor(rewards, dtype=torch.float32),
+        final_observation=torch.tensor(obs, dtype=torch.float32),
     )
 
 
@@ -144,6 +144,8 @@ def train_td3(
     policy_delay: int = 2,
     seed: Optional[int] = None,
     verbose: bool = True,
+    plot_callback=None,
+    plot_interval: int = 50,
 ) -> TD3TrainingResult:
     if seed is not None:
         torch.manual_seed(seed)
@@ -178,15 +180,19 @@ def train_td3(
 
         trajs = replay_buffer.sample(batch_size)
 
-        mean_reward = torch.stack([t.rewards.mean() for t in trajs]).mean().item()
+        # Compute mean reward (per-step, averaged over batch) for consistency with other methods
+        mean_reward = torch.stack([t.rewards for t in new_trajs]).mean().item()
         mean_rewards_history.append(mean_reward)
 
         if mean_reward > best_reward:
             best_reward = mean_reward
         best_rewards_history.append(best_reward)
 
-        if verbose and epoch % 100 == 0:
-            print(f"Epoch {epoch}, mean: {mean_reward:.4f}, best: {best_reward:.4f}")
+        if verbose:
+            print(
+                f"Iteration {epoch}, mean reward: {mean_reward:.4f} (best: {best_reward:.4f})",
+                flush=True,
+            )
 
         if epoch < warmup_steps:
             critic_losses_history.append(0.0)
@@ -227,6 +233,17 @@ def train_td3(
             polyak_update(critic_2, target_critic_2)
 
         actor_losses_history.append(actor_loss_val)
+
+        # Log losses periodically
+        if verbose and epoch % 10 == 0 and epoch >= warmup_steps:
+            print(
+                f"  critic: {critic_loss_val:.2f}, actor: {actor_loss_val:.4f}",
+                flush=True,
+            )
+
+        # Call plot callback if provided
+        if plot_callback is not None and epoch % plot_interval == 0:
+            plot_callback(actor, epoch, env)
 
     return TD3TrainingResult(
         actor=actor,
