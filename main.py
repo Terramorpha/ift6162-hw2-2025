@@ -650,12 +650,372 @@ def run_ppo_complex(seed=3):
 
 
 # =============================================================================
+# Evaluation Functions
+# =============================================================================
+
+
+def evaluate_simple_model(policy, env, n_episodes=20):
+    """Evaluate a policy on the simple environment."""
+    episode_rewards = []
+    episode_energies = []
+    episode_violations = []
+    episode_final_alphas = []
+
+    for ep in range(n_episodes):
+        obs = env.reset(seed=100 + ep)
+        total_reward = 0.0
+        total_energy = 0.0
+        violations = 0
+        final_alpha = 0.0
+
+        done = False
+        while not done:
+            obs_t = torch.tensor(obs, dtype=torch.float32).unsqueeze(0)
+
+            with torch.no_grad():
+                if hasattr(policy, "action_dist"):
+                    action = policy.action_dist(obs_t).mean
+                else:  # TD3 deterministic
+                    action = policy.action(obs_t)
+
+            T_g = action.item() * (env.u_max - env.u_min) + env.u_min
+            obs, reward, done, info = env.step(T_g)
+
+            total_reward += reward
+            total_energy += info["power"]
+            final_alpha = info["alpha"]
+
+            # Check constraint violation
+            if info["alpha"] < env.alpha_min[env.t - 1]:
+                violations += 1
+
+        episode_rewards.append(total_reward)
+        episode_energies.append(total_energy)
+        episode_violations.append(violations)
+        episode_final_alphas.append(final_alpha)
+
+    return {
+        "mean_reward": np.mean(episode_rewards),
+        "std_reward": np.std(episode_rewards),
+        "mean_energy": np.mean(episode_energies),
+        "mean_violations": np.mean(episode_violations),
+        "mean_final_alpha": np.mean(episode_final_alphas),
+    }
+
+
+def evaluate_complex_model(policy, surrogate, n_episodes=20):
+    """Evaluate a policy on the complex surrogate environment."""
+    env = SurrogateCalcinerEnv(
+        surrogate, episode_length=50, alpha_min=0.95, control_T_s=False
+    )
+
+    episode_rewards = []
+    episode_energies = []
+    episode_violations = []
+    episode_final_alphas = []
+
+    for ep in range(n_episodes):
+        obs = env.reset(seed=100 + ep)
+        total_reward = 0.0
+        total_energy = 0.0
+        violations = 0
+        final_alpha = 0.0
+
+        done = False
+        while not done:
+            obs_t = torch.tensor(obs, dtype=torch.float32).unsqueeze(0)
+
+            with torch.no_grad():
+                action_dist = policy.action_dist(obs_t)
+                action = action_dist.mean
+
+            T_g = action.item() * (env.u_max - env.u_min) + env.u_min
+            obs, reward, done, info = env.step(T_g)
+
+            total_reward += reward
+            total_energy += info["energy"]
+            if info["violation"] > 0:
+                violations += 1
+            final_alpha = info["alpha"]
+
+        episode_rewards.append(total_reward)
+        episode_energies.append(total_energy)
+        episode_violations.append(violations)
+        episode_final_alphas.append(final_alpha)
+
+    return {
+        "mean_reward": np.mean(episode_rewards),
+        "std_reward": np.std(episode_rewards),
+        "mean_energy": np.mean(episode_energies),
+        "mean_violations": np.mean(episode_violations),
+        "mean_final_alpha": np.mean(episode_final_alphas),
+    }
+
+
+def evaluate_baseline_simple(env, T_g=1100.0, n_episodes=20):
+    """Evaluate constant temperature baseline on simple env."""
+    episode_rewards = []
+    episode_energies = []
+    episode_violations = []
+    episode_final_alphas = []
+
+    for ep in range(n_episodes):
+        obs = env.reset(seed=100 + ep)
+        total_reward = 0.0
+        total_energy = 0.0
+        violations = 0
+        final_alpha = 0.0
+
+        done = False
+        while not done:
+            obs, reward, done, info = env.step(T_g)
+            total_reward += reward
+            total_energy += info["power"]
+            final_alpha = info["alpha"]
+            if info["alpha"] < env.alpha_min[env.t - 1]:
+                violations += 1
+
+        episode_rewards.append(total_reward)
+        episode_energies.append(total_energy)
+        episode_violations.append(violations)
+        episode_final_alphas.append(final_alpha)
+
+    return {
+        "mean_reward": np.mean(episode_rewards),
+        "std_reward": np.std(episode_rewards),
+        "mean_energy": np.mean(episode_energies),
+        "mean_violations": np.mean(episode_violations),
+        "mean_final_alpha": np.mean(episode_final_alphas),
+    }
+
+
+def evaluate_baseline_complex(surrogate, T_g=1300.0, n_episodes=20):
+    """Evaluate constant temperature baseline on complex env."""
+    env = SurrogateCalcinerEnv(
+        surrogate, episode_length=50, alpha_min=0.95, control_T_s=False
+    )
+
+    episode_rewards = []
+    episode_energies = []
+    episode_violations = []
+    episode_final_alphas = []
+
+    for ep in range(n_episodes):
+        obs = env.reset(seed=100 + ep)
+        total_reward = 0.0
+        total_energy = 0.0
+        violations = 0
+        final_alpha = 0.0
+
+        done = False
+        while not done:
+            obs, reward, done, info = env.step(T_g)
+            total_reward += reward
+            total_energy += info["energy"]
+            final_alpha = info["alpha"]
+            if info["violation"] > 0:
+                violations += 1
+
+        episode_rewards.append(total_reward)
+        episode_energies.append(total_energy)
+        episode_violations.append(violations)
+        episode_final_alphas.append(final_alpha)
+
+    return {
+        "mean_reward": np.mean(episode_rewards),
+        "std_reward": np.std(episode_rewards),
+        "mean_energy": np.mean(episode_energies),
+        "mean_violations": np.mean(episode_violations),
+        "mean_final_alpha": np.mean(episode_final_alphas),
+    }
+
+
+def run_evaluation():
+    """Evaluate all trained models against baselines."""
+    print("\n" + "=" * 60)
+    print("Evaluating All Trained Models")
+    print("=" * 60)
+
+    # Simple environment
+    env_simple = CalcinerEnv(episode_length=40)
+
+    # Complex environment
+    model_path = Path("models/surrogate_model.pt")
+    checkpoint = torch.load(model_path, weights_only=False)
+    N_z = checkpoint["N_z"]
+    surrogate_model = SpatiallyAwareDynamics(N_z=N_z)
+    surrogate_model.load_state_dict(checkpoint["model_state_dict"])
+    surrogate_model.eval()
+    norm_params = {k: np.array(v) for k, v in checkpoint["norm_params"].items()}
+    surrogate = SurrogateModel(surrogate_model, norm_params)
+
+    results = {}
+
+    # Evaluate baselines
+    print("\n" + "-" * 60)
+    print("Baselines - Simple Environment")
+    print("-" * 60)
+    baseline_simple = evaluate_baseline_simple(env_simple, T_g=1100.0, n_episodes=20)
+    print(f"Constant T_g=1100K:")
+    print(
+        f"  Reward: {baseline_simple['mean_reward']:.2f} ± {baseline_simple['std_reward']:.2f}"
+    )
+    print(f"  Energy: {baseline_simple['mean_energy']:.2f}")
+    print(f"  Violations: {baseline_simple['mean_violations']:.1f} / 40 steps")
+    print(f"  Final α: {baseline_simple['mean_final_alpha']:.4f}")
+    results["baseline_simple"] = baseline_simple
+
+    print("\n" + "-" * 60)
+    print("Baselines - Complex Environment")
+    print("-" * 60)
+    baseline_complex = evaluate_baseline_complex(surrogate, T_g=1300.0, n_episodes=20)
+    print(f"Constant T_g=1300K:")
+    print(
+        f"  Reward: {baseline_complex['mean_reward']:.2f} ± {baseline_complex['std_reward']:.2f}"
+    )
+    print(f"  Energy: {baseline_complex['mean_energy']:.2f}")
+    print(f"  Violations: {baseline_complex['mean_violations']:.1f} / 50 steps")
+    print(f"  Final α: {baseline_complex['mean_final_alpha']:.4f}")
+    results["baseline_complex"] = baseline_complex
+
+    # Evaluate REINFORCE
+    if Path("models/reinforce_simple_model.pth").exists():
+        print("\n" + "-" * 60)
+        print("REINFORCE (Simple Environment)")
+        print("-" * 60)
+        policy = torch.load("models/reinforce_simple_model.pth", weights_only=False)
+        policy.eval()
+        reinforce_results = evaluate_simple_model(policy, env_simple, n_episodes=20)
+        print(
+            f"  Reward: {reinforce_results['mean_reward']:.2f} ± {reinforce_results['std_reward']:.2f}"
+        )
+        print(f"  Energy: {reinforce_results['mean_energy']:.2f}")
+        print(f"  Violations: {reinforce_results['mean_violations']:.1f} / 40 steps")
+        print(f"  Final α: {reinforce_results['mean_final_alpha']:.4f}")
+        print(
+            f"  Improvement over baseline: {reinforce_results['mean_reward'] - baseline_simple['mean_reward']:.2f}"
+        )
+        results["reinforce"] = reinforce_results
+
+    # Evaluate PPO Simple
+    if Path("models/ppo_simple_model.pth").exists():
+        print("\n" + "-" * 60)
+        print("PPO (Simple Environment)")
+        print("-" * 60)
+        policy = torch.load("models/ppo_simple_model.pth", weights_only=False)
+        policy.eval()
+        ppo_simple_results = evaluate_simple_model(policy, env_simple, n_episodes=20)
+        print(
+            f"  Reward: {ppo_simple_results['mean_reward']:.2f} ± {ppo_simple_results['std_reward']:.2f}"
+        )
+        print(f"  Energy: {ppo_simple_results['mean_energy']:.2f}")
+        print(f"  Violations: {ppo_simple_results['mean_violations']:.1f} / 40 steps")
+        print(f"  Final α: {ppo_simple_results['mean_final_alpha']:.4f}")
+        print(
+            f"  Improvement over baseline: {ppo_simple_results['mean_reward'] - baseline_simple['mean_reward']:.2f}"
+        )
+        results["ppo_simple"] = ppo_simple_results
+
+    # Evaluate TD3
+    if Path("models/td3_simple_model.pth").exists():
+        print("\n" + "-" * 60)
+        print("TD3 (Simple Environment)")
+        print("-" * 60)
+        checkpoint = torch.load("models/td3_simple_model.pth", weights_only=False)
+        policy = checkpoint["actor"]
+        policy.eval()
+        td3_results = evaluate_simple_model(policy, env_simple, n_episodes=20)
+        print(
+            f"  Reward: {td3_results['mean_reward']:.2f} ± {td3_results['std_reward']:.2f}"
+        )
+        print(f"  Energy: {td3_results['mean_energy']:.2f}")
+        print(f"  Violations: {td3_results['mean_violations']:.1f} / 40 steps")
+        print(f"  Final α: {td3_results['mean_final_alpha']:.4f}")
+        print(
+            f"  Improvement over baseline: {td3_results['mean_reward'] - baseline_simple['mean_reward']:.2f}"
+        )
+        results["td3"] = td3_results
+
+    # Evaluate PPO Complex
+    if Path("models/ppo_complex_model.pth").exists():
+        print("\n" + "-" * 60)
+        print("PPO (Complex Environment)")
+        print("-" * 60)
+        policy = torch.load("models/ppo_complex_model.pth", weights_only=False)
+        policy.eval()
+        ppo_complex_results = evaluate_complex_model(policy, surrogate, n_episodes=20)
+        print(
+            f"  Reward: {ppo_complex_results['mean_reward']:.2f} ± {ppo_complex_results['std_reward']:.2f}"
+        )
+        print(f"  Energy: {ppo_complex_results['mean_energy']:.2f}")
+        print(f"  Violations: {ppo_complex_results['mean_violations']:.1f} / 50 steps")
+        print(f"  Final α: {ppo_complex_results['mean_final_alpha']:.4f}")
+        print(
+            f"  Improvement over baseline: {ppo_complex_results['mean_reward'] - baseline_complex['mean_reward']:.2f}"
+        )
+        results["ppo_complex"] = ppo_complex_results
+
+    # Save all evaluation results
+    eval_results_path = Path("results/evaluation_results.pkl")
+    with open(eval_results_path, "wb") as f:
+        pickle.dump(results, f)
+    print(f"\n\nAll evaluation results saved to {eval_results_path}")
+
+    # Summary table
+    print("\n" + "=" * 60)
+    print("Summary Comparison")
+    print("=" * 60)
+    print(
+        f"{'Method':<20} {'Reward':<15} {'Energy':<15} {'Violations':<15} {'Final α':<10}"
+    )
+    print("-" * 75)
+
+    if "baseline_simple" in results:
+        r = results["baseline_simple"]
+        print(
+            f"{'Baseline (Simple)':<20} {r['mean_reward']:>6.2f} ± {r['std_reward']:<5.2f} {r['mean_energy']:>6.2f}       {r['mean_violations']:>6.1f}       {r['mean_final_alpha']:>6.4f}"
+        )
+
+    if "reinforce" in results:
+        r = results["reinforce"]
+        print(
+            f"{'REINFORCE':<20} {r['mean_reward']:>6.2f} ± {r['std_reward']:<5.2f} {r['mean_energy']:>6.2f}       {r['mean_violations']:>6.1f}       {r['mean_final_alpha']:>6.4f}"
+        )
+
+    if "ppo_simple" in results:
+        r = results["ppo_simple"]
+        print(
+            f"{'PPO (Simple)':<20} {r['mean_reward']:>6.2f} ± {r['std_reward']:<5.2f} {r['mean_energy']:>6.2f}       {r['mean_violations']:>6.1f}       {r['mean_final_alpha']:>6.4f}"
+        )
+
+    if "td3" in results:
+        r = results["td3"]
+        print(
+            f"{'TD3':<20} {r['mean_reward']:>6.2f} ± {r['std_reward']:<5.2f} {r['mean_energy']:>6.2f}       {r['mean_violations']:>6.1f}       {r['mean_final_alpha']:>6.4f}"
+        )
+
+    print()
+
+    if "baseline_complex" in results:
+        r = results["baseline_complex"]
+        print(
+            f"{'Baseline (Complex)':<20} {r['mean_reward']:>6.2f} ± {r['std_reward']:<5.2f} {r['mean_energy']:>6.2f}       {r['mean_violations']:>6.1f}       {r['mean_final_alpha']:>6.4f}"
+        )
+
+    if "ppo_complex" in results:
+        r = results["ppo_complex"]
+        print(
+            f"{'PPO (Complex)':<20} {r['mean_reward']:>6.2f} ± {r['std_reward']:<5.2f} {r['mean_energy']:>6.2f}       {r['mean_violations']:>6.1f}       {r['mean_final_alpha']:>6.4f}"
+        )
+
+
+# =============================================================================
 # Main
 # =============================================================================
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print("Usage: python main.py [reinforce|ppo_simple|td3|ppo_complex]")
+        print("Usage: python main.py [reinforce|ppo_simple|td3|ppo_complex|evaluate]")
         sys.exit(1)
 
     experiment = sys.argv[1].lower()
@@ -673,11 +1033,14 @@ if __name__ == "__main__":
         run_td3_simple(seed=2)
     elif experiment == "ppo_complex":
         run_ppo_complex(seed=3)
+    elif experiment == "evaluate":
+        run_evaluation()
     else:
         print(f"Unknown experiment: {experiment}")
-        print("Valid options: reinforce, ppo_simple, td3, ppo_complex")
+        print("Valid options: reinforce, ppo_simple, td3, ppo_complex, evaluate")
         sys.exit(1)
 
-    print("\n" + "=" * 60)
-    print("Experiment Complete!")
-    print("=" * 60)
+    if experiment != "evaluate":
+        print("\n" + "=" * 60)
+        print("Experiment Complete!")
+        print("=" * 60)
